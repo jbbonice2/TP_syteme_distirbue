@@ -1,82 +1,109 @@
 #include <iostream>
-#include <cstdlib>
-#include <cstring>
-#include <cerrno>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <unistd.h>
-#include <sys/inotify.h>
-#include <libnotify/notify.h>
+#include <arpa/inet.h>
+#include <string>
+#include <chrono>
+#include <thread>
+#include <unordered_map>
+#include <filesystem>
+#include <syslog.h>
 
-#define EVENT_SIZE  (sizeof(struct inotify_event))
-#define BUF_LEN     (1024 * (EVENT_SIZE + 16))
-int monitorFolder(const char *folderPath) {
-    // Initialiser Notify
-    notify_init("MonApplication");
+namespace fs = std::filesystem;
 
-    int fd, wd;
-    char buffer[BUF_LEN];
+// Structure to store filename and size
+struct FileData {
+    std::string filename;
+    long long size; // Using long long to store large file sizes
+};
 
-    // Créer un point de surveillance inotify
-    fd = inotify_init();
-    if (fd < 0) {
-        perror("inotify_init");
-        return 1;
-    }
-
-    // Ajouter un point de surveillance pour le dossier spécifié
-    wd = inotify_add_watch(fd, folderPath, IN_MODIFY | IN_CREATE | IN_DELETE);
-    if (wd == -1) {
-        perror("inotify_add_watch");
-        close(fd); // Fermer le descripteur de fichier avant de retourner
-        return 1;
-    }
-
-    // Boucle de surveillance des événements
-    while (true) {
-        int length = read(fd, buffer, BUF_LEN);
-        if (length < 0) {
-            perror("read");
-            break;
-        }
-
-        int i = 0;
-        while (i < length) {
-            struct inotify_event *event = reinterpret_cast<struct inotify_event *>(&buffer[i]);
-            if (event->len) {
-                if (event->mask & IN_MODIFY) {
-                    // Fichier modifié
-                    NotifyNotification *notification = notify_notification_new("Modification détectée", event->name, nullptr);
-                    notify_notification_show(notification, nullptr);
-                    g_object_unref(G_OBJECT(notification));
-                }
-                if (event->mask & IN_CREATE) {
-                    // Fichier créé
-                    NotifyNotification *notification = notify_notification_new("Création détectée", event->name, nullptr);
-                    notify_notification_show(notification, nullptr);
-                    g_object_unref(G_OBJECT(notification));
-                }
-                if (event->mask & IN_DELETE) {
-                    // Fichier supprimé
-                    NotifyNotification *notification = notify_notification_new("Suppression détectée", event->name, nullptr);
-                    notify_notification_show(notification, nullptr);
-                    g_object_unref(G_OBJECT(notification));
-                }
-            }
-            i += EVENT_SIZE + event->len;
+// Function to generate the list of files and their sizes
+std::string getFileList(const std::string& directory) {
+    std::string fileListStr;
+    for (const auto& entry : fs::directory_iterator(directory)) {
+        if (fs::is_regular_file(entry)) {
+            FileData fileData;
+            fileData.filename = entry.path().filename().string();
+            fileData.size = fs::file_size(entry);
+            fileListStr += fileData.filename + " " + std::to_string(fileData.size) + "\n";
         }
     }
-
-    // Supprimer le point de surveillance et libérer les ressources
-    inotify_rm_watch(fd, wd);
-    close(fd);
-    notify_uninit();
-
-    return 0; // Aucune erreur, retourne 0
+    return fileListStr;
 }
-int main() {
-    const char *folderPath = "/home/bonice/Bureau/Master 1/systeme distribues/projet2/data"; // Remplacez par votre propre chemin
-    if (monitorFolder(folderPath) == 1) {
-        std::cout << "Bonjour" << std::endl;
+
+int main(int argc, char *argv[]) {
+    int opt;
+    std::string serverIP;
+    int serverPort;
+
+    // Parsing command line options
+    while ((opt = getopt(argc, argv, "i:p:")) != -1) {
+        switch (opt) {
+            case 'i':
+                serverIP = optarg;
+                break;
+            case 'p':
+                serverPort = atoi(optarg);
+                break;
+            default:
+                std::cerr << "Usage: " << argv[0] << " -i <server IP> -p <port>\n";
+                return -1;
+        }
     }
+
+    if (serverIP.empty() || serverPort == 0) {
+        std::cerr << "Server IP address or port missing.\n";
+        return -1;
+    }
+
+    openlog("client", LOG_PID, LOG_USER);
+
+    std::string directory = "data";
+    std::string prevFileListStr;
+    bool firstRun = true;
+
+    while (true) {
+        // Generate the new list of files
+        std::string currentFileListStr = getFileList(directory);
+
+        // Check for any modifications
+        if (firstRun || currentFileListStr != prevFileListStr) {
+            syslog(LOG_INFO, "New file list generated.");
+
+            int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+            if (clientSocket == -1) {
+                syslog(LOG_ERR, "Error: Failed to create socket");
+                return -1;
+            }
+
+            sockaddr_in serverAddr;
+            serverAddr.sin_family = AF_INET;
+            serverAddr.sin_port = htons(serverPort);
+            inet_pton(AF_INET, serverIP.c_str(), &serverAddr.sin_addr);
+
+            if (connect(clientSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) == -1) {
+                syslog(LOG_ERR, "Error: Connection failed");
+                close(clientSocket);
+                return -1;
+            }
+
+            // Send the new file list to the server
+            send(clientSocket, currentFileListStr.c_str(), currentFileListStr.size(), 0);
+            close(clientSocket);
+
+            // Update the previous list with the new list
+            prevFileListStr = currentFileListStr;
+
+            // Mark that it's no longer the first run
+            firstRun = false;
+        }
+
+        // Wait for a few seconds before checking again
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    closelog();
     return 0;
 }
 
