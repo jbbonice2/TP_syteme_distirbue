@@ -1,0 +1,9 @@
+IP: 127.0.0.1:44506
+Makefile 304
+appdocker.docx 412713
+client 76352
+test.yaml 668
+client.cpp 3393
+correction inf4097.odt 41831
+Sipser_M_Introduction_to_the_Theory_of_Computation_Cengage_2012.pdf 5596721
+

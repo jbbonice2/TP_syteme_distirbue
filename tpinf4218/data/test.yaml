@@ -1,0 +1,28 @@
+version: "3"
+services:
+    service1:
+        image: nginx:latest
+        container_name: nginx22
+        restart: always
+        ports:
+            - 3308:80
+    service2:
+        image: nginx:latest
+        container_name: apache1
+        restart: always
+        ports:
+            - 3309:80
+        volumes:
+            - /home/bonice/Bureau/testdockercompose/wait-for-it.sh:/var/wait-for-it.sh
+     
+        depends_on:
+            - service1
+            
+        command: ["./wait-for-it.sh", "service1:80 service3:80" ]
+    service3:
+        image: nginx:latest
+        container_name: nginx31
+        restart: always
+        ports:
+            - 33010:80
+      
