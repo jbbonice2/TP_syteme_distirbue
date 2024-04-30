@@ -19,6 +19,8 @@ std::mutex dataMutex; // Mutex pour la synchronisation des données
 
 std::string extractIP(const std::string& line);
 void supprimerPartie(const std::string& fichier, const std::string& ip_a_supprimer);
+std::string getListFiles();
+void handleClientRequest(int client_socket, const std::string& filename);
 
 void supprimerPartie(const std::string& fichier, const std::string& ip_a_supprimer) {
     // Fonction pour supprimer une partie du fichier
@@ -64,7 +66,6 @@ void saveData(const std::string& fileName, const std::string& data, const std::s
 
     // Fermer le fichier
     outFile.close();
-   
 }
 
 std::string extractIP(const std::string& line) {
@@ -78,6 +79,23 @@ std::string extractIP(const std::string& line) {
         }
     }
     return "";
+}
+
+// Fonction pour lire les données à partir d'un fichier
+std::string readDataFromFile(const std::string& filename) {
+    std::ifstream file(filename);
+    if (!file) {
+        std::cerr << "Error opening file.\n";
+        exit(EXIT_FAILURE);
+    }
+
+    std::stringstream data;
+    std::string line;
+    while (std::getline(file, line)) {
+        data << line << std::endl;
+    }
+
+    return data.str();
 }
 
 void handleClient(int clientSocket) {
@@ -100,18 +118,27 @@ void handleClient(int clientSocket) {
         close(clientSocket);
         return;
     }
-    std::cout << "Data received from client:\n" << clientInfo << "\n" << std::string(buffer, bytesRead)  << std::endl; 	
+    std::cout << "Data received from client:\n" << clientInfo << "\n" << std::string(buffer, bytesRead)  << std::endl;   
     syslog(LOG_INFO, "Data received from client:\n%s\n%s", clientInfo.c_str(), std::string(buffer, bytesRead).c_str());
     supprimerPartie(filename, ipAddressStr);  
     saveData(filename, std::string(buffer, bytesRead), clientInfo);
     
     close(clientSocket);
+
+    // Appel de handleClientRequest pour traiter la demande du client
+    handleClientRequest(clientSocket, filename);
+}
+
+// Fonction pour traiter la demande du client
+void handleClientRequest(int client_socket, const std::string& filename) {
+    std::string data = readDataFromFile(filename);
+    write(client_socket, data.c_str(), data.length());
 }
 
 int main(int argc, char *argv[]) {
     openlog("serveur", LOG_PID | LOG_NDELAY, LOG_LOCAL0);
 
-    int port = 8082; // Port par défaut
+    int port = 8080; // Port par défaut
 
     // Analyser les options de ligne de commande
     int opt;
